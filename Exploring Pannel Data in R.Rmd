@@ -1,0 +1,152 @@
+---
+title: "APA_HW_3"
+author: "Deboleena"
+date: "December 9, 2018"
+output: pdf_document
+---
+##Introduction
+
+The goal of this project was to analyze transactional data from Everlane to create a customer targeting strategy based on a variety of factors such as promotional values, spend, age, and gender. In order to build a model that would best account for issues such as unobserved heterogeneity and random effects.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+library(tidyverse)
+library(broom)
+library(plm)
+library(lme4)
+```
+
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+load("data/everlane.Rdata")
+set.seed(1)
+n         = 345 #customers
+t         = sample(1:10,n,replace=TRUE) #transactions per customer
+id        = rep(1:n,times=t)
+N         = length(id)       #observations
+endDate   = as.Date("2018-11-15")
+transdate = endDate - sample(0:365,N,replace=TRUE)
+alpha     = 110
+alpha_sigma = 30
+alpha_i   = rnorm(n,alpha,alpha_sigma)
+
+promo  = sample(c(0,15,25,35),N,replace=TRUE,prob = c(.7,.1,.1,.1))
+
+alpha_promo   = .8
+alpha_promo_s = .5
+promo_i   = rnorm(n,alpha_promo,alpha_promo_s)
+
+beta   = c(.6,.02,-15,-.6) #female*promo,age*promo,female,age
+female    = sample(0:1,n,replace=TRUE)
+age       = sample(18:63,n,replace=TRUE)
+sigma     = 10
+
+female = female[id]
+age    = age[id]
+
+X = cbind(female*promo,age*promo,female,age)
+
+spend = alpha_i[id] + promo_i[id]*promo + X%*%beta + rnorm(N,0,sigma)
+spend[spend<0] = 5
+
+everlane = data.frame(id,transdate,spend,age,female,promo)
+everlane = everlane %>% arrange(id,transdate)
+save(everlane,file="data/everlane.Rdata")
+
+#verify
+reg1 = lm(spend~age*promo+female*promo,everlane)
+# summary(reg1)
+
+reg_re = lmer(spend ~ age+female+age*promo+female*promo + (1 + promo|id),everlane)
+# summ
+```
+
+##EDA
+
+Prior to constructing our model we first did a sanity check on the data and found that the average spend per transaction was $93.38, skewness for spend was 0.47, and kurtosis was 3.14, meaning there are no outliers. Moreover, we found that the data is skewed to the right when there is no promotion code applied, as indicated by the boxplot for Promo = 0. However, as the promotional value increases, median spend per transaction is also increasing as indicated by the increasing median levels in the box plot.
+
+```{r warning=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE, echo=FALSE, fig.width=4, fig.height=3,fig.show='hold',fig.align='center'}
+#basic EDA
+
+a <- ggplot(everlane, aes(x = as.factor(promo), y = spend)) +
+  geom_boxplot(alpha = 0.3, fill = "blue", colour = "darkblue") +
+  xlab("Promotional Value") +
+  ylab("Spend") 
+a
+```
+We made 3 subsets of the data according to different age groups and predicted each group's spending behaviour based on the promotion values. 
+Our suspicion was that anyone within the age group of 18-35 spent most when the promotion value was high 
+and the other groups were not as sensitive to promotion values while they spent . 
+
+```{r echo=FALSE,warning=FALSE,message=FALSE,include=FALSE}
+#segmenting data in 3 buckets of ages 
+#18 - 35 #spend thrift
+#35 - 55 #moderately spend thrift
+#55 and above # dont spend much 
+reg_re2 = lmer(spend~age*promo+female*promo + 
+                (1 + promo|id),everlane)
+everlane_18_35 <- everlane[everlane$age < 35,]
+everlane_35_55 <- everlane[everlane$age > 35 ,]
+everlane_35_55 <- everlane_35_55[everlane_35_55$age < 55 ,]
+everlane_55_63 <- everlane[everlane$age > 55,]
+everlane_55_63 <- everlane_55_63[everlane_55_63$age < 64, ]
+```
+
+```{r warning=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE, echo=FALSE, fig.width=10, fig.height=3,fig.show='hold',fig.align='center'}
+#library(gridExtra)
+
+par(mfrow=c(3,1))
+p1 <- ggplot() +
+stat_ecdf(data=everlane_18_35,aes(spend,colour=as.factor(female)),size=1) +
+scale_color_manual(name=" Gender",values=c("blue","green")) +
+labs(x = "Customer Spend",y = "Percentile Spend")+ggtitle("Custome between age 18 to 35")
+
+p2 <- ggplot() +
+stat_ecdf(data=everlane_35_55,aes(spend,colour=as.factor(female)),size=1) +
+scale_color_manual(name=" Gender",values=c("blue","green")) +
+labs(x = "Customer Spend",y = "Percentile Spend")+ggtitle("Custome between age 35 to 55")
+p3 <- ggplot() +
+stat_ecdf(data=everlane_55_63,aes(spend,colour=as.factor(female)),size=1) +
+scale_color_manual(name=" Gender",values=c("blue","green")) +
+labs(x = "Customer Spend",y = "Percentile Spend")+ggtitle("Custome between age 55 to 68")
+
+figure <- ggpubr::ggarrange(p1, p2, p3, ncol = 3, nrow = 1)
+figure
+```
+The average spending decreases respectivly in the 3 age group. We also noticed that there is a difference between male and female customers. Male customers spend little more than female customer and female customer are more sensitive to promotions.  
+
+```{r echo=FALSE,warning=FALSE,message=FALSE,include=FALSE}
+reg_re_18_35 = lmer(spend~age*promo+female + 
+                (1|id),everlane_18_35)
+reg_re_35_55 = lmer(spend~age*promo+female + 
+                (1|id),everlane_35_55)
+reg_re_55_64 = lmer(spend~age*promo+female + 
+                (1|id),everlane_55_63)
+```
+
+```{r echo=FALSE,warning=FALSE,message=FALSE,include=FALSE}
+summary(reg_re_18_35)
+```
+```{r echo=FALSE,warning=FALSE,message=FALSE,include=FALSE}
+summary(reg_re_35_55)
+```
+```{r echo=FALSE,warning=FALSE,message=FALSE,include=FALSE}
+summary(reg_re_55_64)
+```
+##Conclusion:
+
+From the above experiment, Our suspsion that average baseline spending accross various age group is proven to be diffrent. 
+After running a Random effect on 3 segments of customer we found out that people who fall in an age group of 55 - 63 tend to be more sensitive to promo codes and spend more as the face value the promo code increases.
+
+##Recommendation:
+
+Our reccommendation to Everlane would be to spend less advertisting money targeting younger male individuals in the age group of 18-35, who are going to spend roughly a similar  amount per transaction regardless of the promotional value, and instead use those advertising/promo dollars on the older female age group. This in turn could yield higher revenues for Everlane.
+
+
+
+
+
+
